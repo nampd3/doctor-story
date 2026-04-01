@@ -16,7 +16,8 @@ import {
   doc, 
   serverTimestamp,
   getDoc,
-  setDoc
+  setDoc,
+  getDocFromServer
 } from 'firebase/firestore';
 import { auth, db } from './firebase';
 import { Article, UserProfile, OperationType, FirestoreErrorInfo } from './types';
@@ -122,22 +123,60 @@ function AppContent() {
   const [isSaving, setIsSaving] = useState(false);
 
   useEffect(() => {
+    async function testConnection() {
+      try {
+        // Test connection to Firestore
+        await getDocFromServer(doc(db, '_connection_test', 'test'));
+        console.log("Firestore connection successful");
+      } catch (error) {
+        if (error instanceof Error && error.message.includes('the client is offline')) {
+          console.error("Firestore connection failed: The client is offline. Please check your Firebase configuration.");
+        }
+      }
+    }
+    testConnection();
+
     const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
       setUser(currentUser);
       if (currentUser) {
-        // Sync user profile
-        const userDoc = await getDoc(doc(db, 'users', currentUser.uid));
-        if (userDoc.exists()) {
-          setUserProfile(userDoc.data() as UserProfile);
-        } else {
-          // Default role for new users
-          const newProfile: UserProfile = {
-            uid: currentUser.uid,
-            displayName: currentUser.displayName || 'Anonymous',
-            role: currentUser.email === 'taffen12@gmail.com' ? 'admin' : 'user'
-          };
-          await setDoc(doc(db, 'users', currentUser.uid), newProfile);
-          setUserProfile(newProfile);
+        try {
+          // Sync user profile
+          const userDocRef = doc(db, 'users', currentUser.uid);
+          const userDoc = await getDoc(userDocRef);
+          
+          // Check if this email should be an admin
+          const isAdminEmail = currentUser.email === 'taffen12@gmail.com' || currentUser.email === 'affen12@gmail.com';
+          
+          if (userDoc.exists()) {
+            const data = userDoc.data() as UserProfile;
+            // Upgrade to admin if email matches but role is 'user'
+            if (isAdminEmail && data.role !== 'admin') {
+              const updatedProfile = { ...data, role: 'admin' as const };
+              await setDoc(userDocRef, updatedProfile);
+              setUserProfile(updatedProfile);
+            } else {
+              setUserProfile(data);
+            }
+          } else {
+            // Default role for new users
+            const newProfile: UserProfile = {
+              uid: currentUser.uid,
+              displayName: currentUser.displayName || 'Anonymous',
+              role: isAdminEmail ? 'admin' : 'user'
+            };
+            await setDoc(userDocRef, newProfile);
+            setUserProfile(newProfile);
+          }
+        } catch (error) {
+          console.error("Error syncing user profile:", error);
+          // Fallback for admin check even if Firestore is offline
+          if (currentUser.email === 'taffen12@gmail.com' || currentUser.email === 'affen12@gmail.com') {
+            setUserProfile({
+              uid: currentUser.uid,
+              displayName: currentUser.displayName || 'Admin',
+              role: 'admin'
+            });
+          }
         }
       } else {
         setUserProfile(null);
@@ -354,7 +393,7 @@ function AppContent() {
         </section>
 
         {/* Blog Section */}
-        <section className="max-w-4xl mx-auto px-6 py-32">
+        <section id="journal-section" className="max-w-4xl mx-auto px-6 py-32">
           <div className="flex items-center justify-between mb-20">
             <div className="space-y-2">
               <span className="text-[10px] font-bold uppercase tracking-[0.3em] text-gray-400">Medical Insights</span>
